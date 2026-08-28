@@ -1,0 +1,139 @@
+# SKILL IQ Semantic Model
+# ------------------------
+# Declarative contract describing the Gold-layer star schema, matching the
+# SKILL IQ Solution Document's Table Designs diagram EXACTLY (v3 -- this
+# supersedes v2, which had added role_name/industry/posting_date columns
+# not in the diagram; those were removed per an explicit decision to match
+# the diagram over convenience). This is what the FastAPI query builder
+# reads from (api/app/core/semantic_model.py) so table/column names and
+# business rules (trend thresholds, role taxonomy) live in exactly one place.
+#
+# IMPORTANT: because skill_daily/cert_daily/role_daily now match the
+# diagram exactly (no role dimension at all), they CANNOT answer any
+# role-scoped question. Every role-scoped API query (GET /api/skills,
+# /api/certifications, /api/filters, and /api/skills' metrics block) reads
+# from job_posting_lines instead -- see api/app/db/queries.py's module
+# docstring for the full reasoning. skill_daily/cert_daily/role_daily
+# still get built (matching the documented design) but are not queried by
+# the role-scoped endpoints.
+
+version: 3
+catalog: skill_iq_catalog
+schema: gold
+
+# Fixed role taxonomy -- must match GET /api/filters' `roles` enum exactly.
+roles:
+  - { value: data_engineer, label: "Data Engineer" }
+  - { value: data_scientist, label: "Data Scientist" }
+  - { value: ml_engineer, label: "ML Engineer" }
+  - { value: data_analyst, label: "Data Analyst" }
+  - { value: software_engineer, label: "Software Engineer" }
+
+date_ranges: [30d, 60d, 90d, 6m, 1y, 2y, all]
+
+# Trend classification thresholds (GET /api/skills, /api/certifications).
+# occurrence_pct is computed over the full selected window; trend compares
+# the SECOND half of the window against the FIRST half (split at
+# window_midpoint, both returned in `meta`) so a genuinely recent shift is
+# visible even inside a single 90-day window.
+trend:
+  method: split_half_comparison
+  trending_threshold_pp: 2.0    # recent-half occurrence_pct - prior-half >= +2pp -> "trending"
+  declining_threshold_pp: -2.0  # <= -2pp -> "declining"
+  # otherwise -> "stable"
+
+# Metric deltas (job_postings, open_roles, median_salary_usd in GET
+# /api/skills) compare the full selected window against the immediately
+# preceding period of the SAME length (not the split-half above).
+metric_delta:
+  method: prior_period_comparison
+
+entities:
+  job_posting:
+    table: job_posting_lines
+    grain: one row per job posting (job_id)
+    primary_key: job_id
+    note: >
+      THE query source for every role/industry/date-scoped API request
+      (filters, skills, certifications, metrics) -- the only Gold entity
+      that retains role_name + industry + posting_date per row, since
+      skill_daily/cert_daily/role_daily no longer carry a role dimension.
+    dimensions:
+      - { name: title, type: string }
+      - { name: description, type: string }
+      - { name: url, type: string }
+      - { name: company, type: string }
+      - { name: company_domain, type: string }
+      - { name: industry, type: string }
+      - { name: role_name, type: string, values: [data_engineer, data_scientist, ml_engineer, data_analyst, software_engineer, other] }
+      - { name: seniority, type: string, values: [intern, junior, mid, senior, lead, staff, principal, unknown] }
+      - { name: remote, type: boolean }
+      - { name: hybrid, type: boolean }
+      - { name: is_open, type: boolean }
+      - { name: min_salary_usd, type: double }
+      - { name: max_salary_usd, type: double }
+      - { name: avg_salary_usd, type: double }
+      - { name: date_posted, type: timestamp }
+      - { name: posting_date, type: date }
+      - { name: country, type: string }
+      - { name: skill_names, type: array<string> }
+      - { name: cert_names, type: array<string> }
+    measures:
+      - { name: total_postings, agg: count_distinct, column: job_id }
+
+  skill_daily:
+    table: skill_daily
+    grain: one row per (posting_date, industry, skill_name)
+    primary_key: skills_daily_id
+    note: "Matches the solution doc's diagram exactly -- NO role dimension. Not queried by role-scoped endpoints; see job_posting instead."
+    dimensions:
+      - { name: skill_name, type: string }
+      - { name: skill_category, type: string, values: [technology, platform, methodology] }
+      - { name: industry, type: string }
+      - { name: posting_date, type: date }
+    measures:
+      - { name: posting_appear_count, agg: sum, column: posting_appear_count }
+      - { name: total_posting_count, agg: sum, column: total_posting_count }
+      # occurrence_pct = 100 * sum(posting_appear_count) / sum(total_posting_count) over the window
+
+  cert_daily:
+    table: cert_daily
+    grain: one row per (posting_date, industry, cert_name)
+    primary_key: cert_daily_id
+    note: "Matches the solution doc's diagram exactly -- NO role dimension. Not queried by role-scoped endpoints; see job_posting instead."
+    dimensions:
+      - { name: cert_name, type: string }
+      - { name: cert_provider, type: string }
+      - { name: industry, type: string }
+      - { name: posting_date, type: date }
+    measures:
+      - { name: posting_appear_count, agg: sum, column: posting_appear_count }
+      - { name: total_posting_count, agg: sum, column: total_posting_count }
+
+  role_daily:
+    table: role_daily
+    grain: one row per (business_date, role_name) -- cumulative as-of snapshot, NOT a per-day time series
+    primary_key: role_daily_id
+    note: "Matches the solution doc's diagram exactly -- NO posting_date or industry at all. Cannot support date_range windowing. Not queried by the API; see job_posting instead."
+    dimensions:
+      - { name: role_name, type: string }
+    measures:
+      - { name: job_postings_count, agg: latest, column: job_postings_count }
+      - { name: open_roles_count, agg: latest, column: open_roles_count }
+      - { name: min_salary, agg: latest, column: min_salary }
+      - { name: max_salary, agg: latest, column: max_salary }
+      - { name: median_salary, agg: latest, column: median_salary }
+
+relationships:
+  - from: job_posting.role_name
+    to: role_daily.role_name
+    type: many_to_one
+
+# Shared filter vocabulary -- powers GET /api/filters. All sourced from
+# job_posting (job_posting_lines), not skill_daily/cert_daily -- those no
+# longer carry role_name to cascade against.
+filters:
+  - { name: role, entity: job_posting, column: role_name, source: fixed_enum }
+  - { name: industry, entity: job_posting, column: industry, source: distinct_query, cascades_on: role }
+  - { name: skill, entity: job_posting, column: skill_names, source: array_explode }
+  - { name: certification, entity: job_posting, column: cert_names, source: array_explode }
