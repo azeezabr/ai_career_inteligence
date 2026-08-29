@@ -48,14 +48,14 @@ def get_filters(role: str | None, industry: str | None) -> dict:
 
     if industry and industry != "all":
         scoped = run_query(
-            f"SELECT DISTINCT role_name FROM {table} WHERE industry = %s", (industry,)
+            f"SELECT DISTINCT role_name FROM {table} WHERE industry = ?", (industry,)
         )
         scoped_values = {r["role_name"] for r in scoped}
         roles = [r for r in roles if r["value"] in scoped_values]
 
     if role:
         scoped = run_query(
-            f"SELECT DISTINCT industry FROM {table} WHERE role_name = %s", (role,)
+            f"SELECT DISTINCT industry FROM {table} WHERE role_name = ?", (role,)
         )
         scoped_values = {r["industry"] for r in scoped if r["industry"]}
         industries = [{"value": "all", "label": "All Industries"}] + [
@@ -71,7 +71,7 @@ def get_filters(role: str | None, industry: str | None) -> dict:
 
 def _industry_clause(industry: str) -> tuple[str, list]:
     if industry and industry != "all":
-        return "AND industry = %s", [industry]
+        return "AND industry = ?", [industry]
     return "", []
 
 
@@ -86,7 +86,7 @@ def _metrics_over_window(role: str, industry: str, start, end) -> dict:
             COUNT(DISTINCT CASE WHEN is_open THEN job_id END) AS open_roles,
             percentile_approx(avg_salary_usd, 0.5) AS median_salary_usd
         FROM {table}
-        WHERE role_name = %s AND posting_date >= %s AND posting_date < %s {ind_clause}
+        WHERE role_name = ? AND posting_date >= ? AND posting_date < ? {ind_clause}
         """,
         (role, start, end, *ind_params),
     )[0]
@@ -148,13 +148,13 @@ def get_skills_analysis(role: str, industry: str, sort: str, limit: int, window:
         WITH filtered AS (
             SELECT job_id, posting_date, skill_names
             FROM {table}
-            WHERE role_name = %s AND posting_date >= %s AND posting_date < %s {ind_clause}
+            WHERE role_name = ? AND posting_date >= ? AND posting_date < ? {ind_clause}
         ),
         totals AS (
             SELECT
                 COUNT(DISTINCT job_id) AS total_full,
-                COUNT(DISTINCT CASE WHEN posting_date < %s THEN job_id END) AS total_prior_half,
-                COUNT(DISTINCT CASE WHEN posting_date >= %s THEN job_id END) AS total_recent_half
+                COUNT(DISTINCT CASE WHEN posting_date < ? THEN job_id END) AS total_prior_half,
+                COUNT(DISTINCT CASE WHEN posting_date >= ? THEN job_id END) AS total_recent_half
             FROM filtered
         ),
         exploded AS (
@@ -166,8 +166,8 @@ def get_skills_analysis(role: str, industry: str, sort: str, limit: int, window:
             SELECT
                 skill_name,
                 COUNT(DISTINCT job_id) AS appear_full,
-                COUNT(DISTINCT CASE WHEN posting_date < %s THEN job_id END) AS appear_prior_half,
-                COUNT(DISTINCT CASE WHEN posting_date >= %s THEN job_id END) AS appear_recent_half
+                COUNT(DISTINCT CASE WHEN posting_date < ? THEN job_id END) AS appear_prior_half,
+                COUNT(DISTINCT CASE WHEN posting_date >= ? THEN job_id END) AS appear_recent_half
             FROM exploded
             GROUP BY skill_name
         )
@@ -229,7 +229,7 @@ def get_certifications_analysis(role: str, industry: str, limit: int, window: Wi
         WITH filtered AS (
             SELECT job_id, cert_names
             FROM {table}
-            WHERE role_name = %s AND posting_date >= %s AND posting_date < %s {ind_clause}
+            WHERE role_name = ? AND posting_date >= ? AND posting_date < ? {ind_clause}
         ),
         totals AS (
             SELECT COUNT(DISTINCT job_id) AS total FROM filtered
@@ -247,7 +247,7 @@ def get_certifications_analysis(role: str, industry: str, limit: int, window: Wi
         SELECT cert_agg.cert_name, cert_agg.appear, totals.total
         FROM cert_agg CROSS JOIN totals
         ORDER BY cert_agg.appear DESC
-        LIMIT %s
+        LIMIT ?
         """,
         (role, window.window_start, window.window_end, *ind_params, limit),
     )
@@ -258,7 +258,7 @@ def get_certifications_analysis(role: str, industry: str, limit: int, window: Wi
     cert_names = [r["cert_name"] for r in rows]
     providers = {}
     if cert_names:
-        placeholders = ", ".join(["%s"] * len(cert_names))
+        placeholders = ", ".join(["?"] * len(cert_names))
         cert_dim_table = entity_table("job_posting").split(".gold.")[0] + ".silver.certifications"
         provider_rows = run_query(
             f"SELECT name, provider FROM {cert_dim_table} WHERE name IN ({placeholders})",
@@ -288,7 +288,7 @@ def get_jobs(
     window: Window, page: int, page_size: int,
 ) -> tuple[list[dict], int]:
     table = entity_table("job_posting")
-    where = ["role_name = %s", "posting_date >= %s", "posting_date < %s"]
+    where = ["role_name = ?", "posting_date >= ?", "posting_date < ?"]
     params: list = [role, window.window_start, window.window_end]
 
     ind_clause, ind_params = _industry_clause(industry)
@@ -297,10 +297,10 @@ def get_jobs(
         params.extend(ind_params)
 
     if skill:
-        where.append("array_contains(skill_names, %s)")
+        where.append("array_contains(skill_names, ?)")
         params.append(skill)
     if certificate:
-        where.append("array_contains(cert_names, %s)")
+        where.append("array_contains(cert_names, ?)")
         params.append(certificate)
 
     where_clause = " AND ".join(where)
@@ -316,7 +316,7 @@ def get_jobs(
         FROM {table}
         WHERE {where_clause}
         ORDER BY date_posted DESC
-        LIMIT %s OFFSET %s
+        LIMIT ? OFFSET ?
         """,
         (*params, page_size, offset),
     )
