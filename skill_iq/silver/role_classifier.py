@@ -5,10 +5,22 @@ The real Bronze schema gives us `normalized_title` from theirstack, but it
 is sometimes an EMPTY STRING (`""`), not `NULL`, when theirstack hasn't
 normalized a given posting's title -- confirmed against a real sample
 record. Falls back to `job_title` in that case. Bucketing the result into
-SKILL IQ's 5-value canonical taxonomy (data_engineer | data_scientist |
-ml_engineer | data_analyst | software_engineer, + "other") is a small,
-well-defined keyword-matching problem -- not worth an LLM call per posting
-given the volume.
+SKILL IQ's canonical taxonomy is a small, well-defined keyword-matching
+problem -- not worth an LLM call per posting given the volume.
+
+*** SCOPE CHANGE (2026-10-02): project is scoped to exactly 3 roles ***
+Earlier versions of this taxonomy had 5 values (data_engineer |
+data_scientist | ml_engineer | data_analyst | software_engineer). Per
+explicit decision, SKILL IQ only needs: data_engineer | ai_engineer |
+data_architect (+ "other" as the catch-all for everything else). Anything
+that previously matched data_scientist, software_engineer, or the old
+ml_engineer's non-AI keywords ("mlops", "machine learning engineer" without
+"ai") now simply falls into "other" -- that's intentional narrowing, not a
+bug. "ai_engineer" absorbs what the old ml_engineer bucket matched for AI
+titles. "data_architect" is a brand-new bucket with no prior patterns;
+extend it as real "Data Architect"-style titles are seen (none were in the
+145-row Bronze sample checked on 2026-09-26, so this is a best-effort
+starter list pending real examples).
 
 *** BUG FIX: empty string is not NULL ***
 A first version of this file did `COALESCE(normalized_title, job_title)`,
@@ -20,30 +32,25 @@ producing "other" for every single row. Fixed by explicitly converting
 empty/whitespace-only normalized_title to NULL (via NULLIF + TRIM) before
 the COALESCE, so the fallback to job_title actually triggers.
 
-Also broadened `software_engineer` patterns after seeing a real title,
-"Senior Software Development Engineer (Front End)", which contains
-"software" and "engineer" but NOT the literal phrase "software engineer"
-(the word "Development" sits between them) -- would still have missed
-even with the empty-string bug fixed. Added "development engineer" and
-"software development engineer" as explicit patterns.
-
 Extend `_PATTERNS` as new title variants show up in real data; order
-matters (first match wins), so more specific patterns (e.g. "ml engineer")
-are listed before broader ones (e.g. "engineer").
+matters (first match wins), so more specific patterns are listed before
+broader ones.
 """
 
 from pyspark.sql import functions as F
 
 # (canonical_role, list of substrings to match against the lowercased title)
 _PATTERNS = [
-    ("ml_engineer", ["machine learning engineer", "ml engineer", "ai engineer", "mlops"]),
-    ("data_engineer", ["data engineer", "analytics engineer", "etl developer", "etl engineer"]),
-    ("data_scientist", ["data scientist", "applied scientist", "research scientist"]),
-    ("data_analyst", ["data analyst", "business intelligence analyst", "bi analyst", "reporting analyst"]),
-    ("software_engineer", [
-        "software engineer", "software developer", "software development engineer", "development engineer",
-        "backend engineer", "backend developer", "frontend engineer", "frontend developer",
-        "full stack", "fullstack", "application developer", "sde", "developer",
+    ("data_architect", [
+        "data architect", "information architect", "analytics architect",
+        "cloud data architect", "enterprise data architect",
+    ]),
+    ("ai_engineer", [
+        "ai engineer", "artificial intelligence engineer", "machine learning engineer",
+        "ml engineer", "genai engineer", "generative ai engineer", "ai/ml engineer",
+    ]),
+    ("data_engineer", [
+        "data engineer", "analytics engineer", "etl developer", "etl engineer", "data platform engineer",
     ]),
 ]
 

@@ -1,12 +1,13 @@
 # SKILL IQ Semantic Model
 # ------------------------
 # Declarative contract describing the Gold-layer star schema, matching the
-# SKILL IQ Solution Document's Table Designs diagram EXACTLY (v3 -- this
-# supersedes v2, which had added role_name/industry/posting_date columns
-# not in the diagram; those were removed per an explicit decision to match
-# the diagram over convenience). This is what the FastAPI query builder
-# reads from (api/app/core/semantic_model.py) so table/column names and
-# business rules (trend thresholds, role taxonomy) live in exactly one place.
+# SKILL IQ Solution Document's Table Designs diagram EXACTLY. v3 made the
+# Gold schema match the diagram (role_name/industry/posting_date removed
+# from skill_daily/cert_daily/role_daily). v4 (2026-10-02) narrowed the
+# role taxonomy itself from 5 values to the 3 actually in scope: see
+# `roles` below. This is what the FastAPI query builder reads from
+# (api/app/core/semantic_model.py) so table/column names and business
+# rules (trend thresholds, role taxonomy) live in exactly one place.
 #
 # IMPORTANT: because skill_daily/cert_daily/role_daily now match the
 # diagram exactly (no role dimension at all), they CANNOT answer any
@@ -17,17 +18,19 @@
 # still get built (matching the documented design) but are not queried by
 # the role-scoped endpoints.
 
-version: 3
+version: 4
 catalog: skill_iq_catalog
 schema: gold
 
 # Fixed role taxonomy -- must match GET /api/filters' `roles` enum exactly.
+# v4 (2026-10-02): narrowed from 5 roles to the 3 actually in scope for this
+# project. "other" is intentionally excluded from this list -- it's the
+# classifier's catch-all bucket (silver.roles / role_classifier.py), not a
+# user-selectable filter value.
 roles:
   - { value: data_engineer, label: "Data Engineer" }
-  - { value: data_scientist, label: "Data Scientist" }
-  - { value: ml_engineer, label: "ML Engineer" }
-  - { value: data_analyst, label: "Data Analyst" }
-  - { value: software_engineer, label: "Software Engineer" }
+  - { value: ai_engineer, label: "AI Engineer" }
+  - { value: data_architect, label: "Data Architect" }
 
 date_ranges: [30d, 60d, 90d, 6m, 1y, 2y, all]
 
