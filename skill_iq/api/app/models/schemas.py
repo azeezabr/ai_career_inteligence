@@ -27,7 +27,17 @@ class AppliedFilters(BaseModel):
 
 
 class MetricValue(BaseModel):
-    value: float
+    # value is nullable because median_salary_usd's percentile_approx() returns
+    # SQL NULL (-> Python None) when a role/industry/window combination matches
+    # zero postings -- e.g. a role with no data yet. job_postings/open_roles
+    # never hit this (COUNT(DISTINCT ...) always returns 0, never NULL), but
+    # the shared model has to accommodate the one field that can genuinely be
+    # "no data" rather than "zero". Was non-nullable `float`, which caused
+    # FastAPI's response validation to 500 instead of returning the real
+    # zero-postings response (confirmed via GET /api/skills?role=data_architect
+    # on a role classified by role_classifier.py but with no matching postings
+    # yet in Bronze).
+    value: float | None
     delta_pct: float | None = None  # None when no prior-period comparison is meaningful (date_range=all)
 
 
